@@ -1,0 +1,97 @@
+---
+- name: Check MySQL Server Health
+  hosts: mysql_server
+  gather_facts: no
+  vars:
+    mysql_host: "10.112.0.20"
+    mysql_user: "rajumysql"
+    mysql_password: "Raju@2002"
+    mysql_database: "information_schema"
+
+  tasks:
+    - name: Get Database Space Utilization
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        query: |
+          SELECT table_schema AS DatabaseName, 
+                 ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS SizeMB 
+          FROM information_schema.tables 
+          GROUP BY table_schema;
+      register: db_space
+      ignore_errors: yes
+
+    - name: Get Database Health
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        query: |
+          SELECT schema_name AS DatabaseName, default_character_set_name AS Charset, 
+                 default_collation_name AS Collation 
+          FROM information_schema.schemata;
+      register: db_health
+      ignore_errors: yes
+
+    - name: Check for Deadlocks
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        query: "SHOW ENGINE INNODB STATUS;"
+      register: deadlocks
+      ignore_errors: yes
+
+    - name: Get MySQL Scheduled Job Activities
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        query: |
+          SELECT event_name, event_schema, status, interval_value, interval_field 
+          FROM information_schema.events;
+      register: job_activities
+      ignore_errors: yes
+
+    - name: Convert Outputs to JSON
+      set_fact:
+        db_space_fact: "{{ db_space.query_result | default([]) }}"
+        db_health_fact: "{{ db_health.query_result | default([]) }}"
+        deadlocks_fact: "{{ deadlocks.query_result | default([]) }}"
+        job_activities_fact: "{{ job_activities.query_result | default([]) }}"
+
+    - name: Display Formatted Results
+      debug:
+        msg: |
+          📊 Database Space Utilization:
+          {% for item in db_space_fact %}
+           - {{ item.DatabaseName }}: {{ item.SizeMB }} MB
+          {% endfor %}
+          
+          🚨 Deadlocks:
+          {% if deadlocks_fact %}
+           - Deadlocks detected!
+          {% else %}
+           - No deadlocks detected
+          {% endif %}
+          
+          [ℹ️] Job activities query returned {{ job_activities_fact | length }} rows.
+          
+          🛠 MySQL Scheduled Jobs:
+          {% for item in job_activities_fact %}
+           - Event: {{ item.event_name }} (Schema: {{ item.event_schema }})
+             - Status: {{ item.status }}
+             - Interval: Every {{ item.interval_value }} {{ item.interval_field }}
+          {% else %}
+           [❌] No scheduled jobs found.
+          {% endfor %}
+          
+          🩺 Database Health Check:
+          {% for item in db_health_fact %}
+           - Database: {{ item.DatabaseName }}
+             - Charset: {{ item.Charset }}
+             - Collation: {{ item.Collation }}
+          {% else %}
+           [❌] No database health data available.
+          {% endfor %}
